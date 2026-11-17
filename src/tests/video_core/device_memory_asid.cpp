@@ -121,11 +121,17 @@ TEST_CASE("A device mapping resolves through the process it was attributed to",
 
     std::vector<u8> out(0x1000, 0x00);
 
-    // A mapping attributed to its owning process reads back that process's bytes.
+    // Two live registrations.
+    REQUIRE(device_memory.LiveProcessCountForDiagnostics() == 2);
+
+    // A mapping attributed to its owning process reads back that process's bytes, and records
+    // the process it was attributed to as the page's provenance.
     device_memory.Map(0x10000, 0x8000, 0x1000, asid_a);
     device_memory.ReadBlockUnsafe(0x10000, out.data(), out.size());
     REQUIRE(out.front() == 0xAA);
     REQUIRE(out.back() == 0xAA);
+    REQUIRE(device_memory.MappingProvenanceForDiagnostics(0x10000) ==
+            static_cast<u32>(asid_a.id) + 1U);
 
     // Device VAs have no per-process namespace: mapping the same device pages again under the
     // second process silently replaces the first process's view.
@@ -133,6 +139,8 @@ TEST_CASE("A device mapping resolves through the process it was attributed to",
     device_memory.ReadBlockUnsafe(0x10000, out.data(), out.size());
     REQUIRE(out.front() == 0xBB);
     REQUIRE(out.back() == 0xBB);
+    REQUIRE(device_memory.MappingProvenanceForDiagnostics(0x10000) ==
+            static_cast<u32>(asid_b.id) + 1U);
 
     // A guest VA with no backing in the attributed process is recorded as unmapped: the map
     // does not fail, and reads zero-fill (ReportUnmappedRead logs the first 16 per boot).
@@ -141,10 +149,27 @@ TEST_CASE("A device mapping resolves through the process it was attributed to",
     device_memory.ReadBlockUnsafe(0x20000, out.data(), out.size());
     REQUIRE(out.front() == 0x00);
     REQUIRE(out.back() == 0x00);
+    // The attribution is recorded even when the backing resolution failed: this is the
+    // mis-attributed-Map case (#2030) the diagnostic exists to identify.
+    REQUIRE(device_memory.MappingProvenanceForDiagnostics(0x20000) ==
+            static_cast<u32>(asid_a.id) + 1U);
 
     // The same guest VA under its owning process resolves normally.
     device_memory.Map(0x30000, 0x9000, 0x1000, asid_b);
     device_memory.ReadBlockUnsafe(0x30000, out.data(), out.size());
     REQUIRE(out.front() == 0xCC);
     REQUIRE(out.back() == 0xCC);
+    REQUIRE(device_memory.MappingProvenanceForDiagnostics(0x30000) ==
+            static_cast<u32>(asid_b.id) + 1U);
+
+    // Unmap clears the recorded provenance.
+    device_memory.Unmap(0x20000, 0x1000);
+    REQUIRE(device_memory.MappingProvenanceForDiagnostics(0x20000) == 0);
+
+    // Unregistering and re-registering recycles the id, and the live count follows.
+    device_memory.UnregisterProcess(asid_a);
+    REQUIRE(device_memory.LiveProcessCountForDiagnostics() == 1);
+    const Core::Asid asid_a2 = device_memory.RegisterProcess(&process_a.GetMemory());
+    REQUIRE(asid_a2.id == asid_a.id);
+    REQUIRE(device_memory.LiveProcessCountForDiagnostics() == 2);
 }
