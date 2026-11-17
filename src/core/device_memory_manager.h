@@ -246,6 +246,10 @@ private:
         VAddr cpu_backing_address;
         u32 continuity_tracker;
         u32 compressed_physical_ptr;
+        /// Asid.id + 1 of the process the last Map of this page was attributed to; 0 when no
+        /// mapping was recorded (also the value a never-committed page reads back as). Kept so an
+        /// unmapped-read report can say which process the range was last mapped under.
+        u32 mapping_asid_plus1;
     };
     Common::SparseLargeVector<u32> compressed_device_addr;
     Common::SparseLargeVector<TrackedEntry> tracked_entries;
