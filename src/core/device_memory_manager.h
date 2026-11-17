@@ -155,7 +155,7 @@ public:
     /// (Asid.id + 1, or 0 when no mapping was recorded). Lock-free and diagnostic-only: a stale
     /// view would only change a log line.
     [[nodiscard]] u32 MappingProvenanceForDiagnostics(DAddr address) const {
-        return mapping_asid_plus1.GetOrDefault(address >> Memory::LICHII_PAGEBITS)
+        return mapping_asid_plus1.GetOrDefault(address >> page_bits)
             .load(std::memory_order_acquire);
     }
 
