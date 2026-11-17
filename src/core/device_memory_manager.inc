@@ -362,7 +362,8 @@ void DeviceMemoryManager<Traits>::Map(DAddr address, VAddr virtual_address, size
         // One page per run unless tracked below: a run left from an earlier mapping of these
         // device pages would make WalkBlock copy the host memory that followed that mapping.
         tracked_entries.GetUnchecked(start_page_d + i).continuity_tracker = 0;
-        mapping_asid_plus1.Set(start_page_d + i, static_cast<u32>(asid.id) + 1U);
+        mapping_asid_plus1.GetAndFault(start_page_d + i)
+            .store(static_cast<u32>(asid.id) + 1U, std::memory_order_release);
         if (ptr == nullptr) [[unlikely]] {
             tracked_entries.GetUnchecked(start_page_d + i).compressed_physical_ptr = 0;
             continue;
@@ -413,7 +414,7 @@ void DeviceMemoryManager<Traits>::Unmap(DAddr address, size_t size) {
         entry.compressed_physical_ptr = 0;
         entry.cpu_backing_address = 0;
         entry.continuity_tracker = 0;
-        mapping_asid_plus1.Set(start_page_d + i, 0);
+        mapping_asid_plus1.GetAndFault(start_page_d + i).store(0, std::memory_order_release);
         if (phys_addr != 0) [[likely]] {
             u32& base_dev = compressed_device_addr.GetAndFault(phys_addr - 1U);
             if ((base_dev >> MULTI_FLAG_BITS) == 0) [[likely]] {
@@ -694,9 +695,8 @@ void DeviceMemoryManager<Traits>::ReadBlock(DAddr address, void* dest_pointer, s
         });
     if (unmapped_bytes != 0) {
         ReportUnmappedRead(first_unmapped, address, size, unmapped_bytes,
-                           mapping_asid_plus1.GetOrDefault(first_unmapped >>
-                                                           Memory::LICHII_PAGEBITS),
-                           registered_processes.size() - id_pool.size(), caller);
+                           MappingProvenanceForDiagnostics(first_unmapped),
+                           LiveProcessCountForDiagnostics(), caller);
     }
 }
 
@@ -771,9 +771,8 @@ void DeviceMemoryManager<Traits>::ReadBlockUnsafe(DAddr address, void* dest_poin
         });
     if (unmapped_bytes != 0) {
         ReportUnmappedRead(first_unmapped, address, size, unmapped_bytes,
-                           mapping_asid_plus1.GetOrDefault(first_unmapped >>
-                                                           Memory::LICHII_PAGEBITS),
-                           registered_processes.size() - id_pool.size(), caller);
+                           MappingProvenanceForDiagnostics(first_unmapped),
+                           LiveProcessCountForDiagnostics(), caller);
     }
 }
 
@@ -813,6 +812,7 @@ Asid DeviceMemoryManager<Traits>::RegisterProcess(Memory::Memory* memory_device_
         registered_processes.emplace_back(memory_device_inter);
         new_id = registered_processes.size() - 1U;
     }
+    live_process_count.fetch_add(1, std::memory_order_release);
     return Asid{new_id};
 }
 
@@ -820,6 +820,7 @@ template <typename Traits>
 void DeviceMemoryManager<Traits>::UnregisterProcess(Asid asid) {
     registered_processes[asid.id] = nullptr;
     id_pool.push_front(asid.id);
+    live_process_count.fetch_sub(1, std::memory_order_release);
 }
 
 template <typename Traits>
