@@ -1182,9 +1182,8 @@ void NxTools::Finished(std::shared_ptr<Job> job, int code, QString error) {
     if (metadata_write) {
         emit MetadataWriteFinished();
     }
-    if (job->in_place_write) {
-        emit InPlaceWriteFinished();
-    }
+    const bool in_place_write = job->in_place_write;
+    bool retried = false;
 
     // add keeps the content it committed before a failure or a cancel, also across a retry:
     // report it and refresh.
@@ -1235,6 +1234,7 @@ void NxTools::Finished(std::shared_ptr<Job> job, int code, QString error) {
             if (answer == QMessageBox::Retry) {
                 // The retry refreshes the archives when it ends.
                 job->PrepareRetryWithoutRecipe();
+                retried = true;
                 Start(std::move(job));
                 break;
             }
@@ -1247,5 +1247,11 @@ void NxTools::Finished(std::shared_ptr<Job> job, int code, QString error) {
         }
         break;
     }
+    }
+    if (in_place_write && !retried) {
+        // A retry keeps the game list's readers released: they come back when the retry ends
+        // and lands here again. Releasing them at the first failure would let the scan
+        // re-acquire the archive while the retry dialog is open.
+        emit InPlaceWriteFinished();
     }
 }
