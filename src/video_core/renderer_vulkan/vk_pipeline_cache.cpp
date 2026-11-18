@@ -3225,6 +3225,12 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             mapped_pointers[index] = envs[mapped_env++]->MappedStoragePointerKeys();
         }
     }
+    size_t stage_spirv_words = 0;
+    for (const auto& stage : stage_spirv) {
+        stage_spirv_words += stage.size();
+    }
+    LOG_DEBUG(Render_Vulkan, "Graphics pipeline build start: pipeline={:#016x} spirv_words={}",
+              hash, stage_spirv_words);
     auto pipeline = std::make_unique<GraphicsPipeline>(
         scheduler, buffer_cache, texture_cache, vulkan_pipeline_cache, pipeline_binaries.get(),
         &shader_notify, device, descriptor_pool, guest_descriptor_queue, descriptor_buffer_ring,
@@ -3643,6 +3649,8 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
             const auto begin = std::chrono::steady_clock::now();
             vk::ShaderModule module{EmitComputeModule(device, profile, job->program, shader_hash,
                                                       kept_spirv, job->reference_spirv)};
+            LOG_DEBUG(Render_Vulkan, "Compute pipeline build start: shader={:#016x} spirv_words={}",
+                      shader_hash, kept_spirv.size() / sizeof(u32));
             auto completed_pools = std::move(job->pools);
             job.reset();
             ReturnPools(std::move(completed_pools));
@@ -3659,6 +3667,8 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
         std::vector<u8> kept_spirv;
         vk::ShaderModule module{
             EmitComputeModule(device, profile, program, key.unique_hash, kept_spirv)};
+        LOG_DEBUG(Render_Vulkan, "Compute pipeline build start: shader={:#016x} spirv_words={}",
+                  key.unique_hash, kept_spirv.size() / sizeof(u32));
         const Shader::Info info{std::move(program.info)};
         if (!build_in_parallel) {
             // The driver compiles on this thread. Precache and boot workers would otherwise hold their
