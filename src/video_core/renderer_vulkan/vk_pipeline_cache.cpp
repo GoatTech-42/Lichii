@@ -471,6 +471,8 @@ vk::ShaderModule EmitComputeModule(const Device& device, const Shader::Profile& 
     kept_spirv = Common::Compression::CompressDataZSTD(reinterpret_cast<const u8*>(code.data()),
                                                        code.size() * sizeof(u32), 1);
     device.SaveShader(code);
+    LOG_DEBUG(Render_Vulkan, "Compute pipeline build start: shader={:#016x} spirv_words={}",
+              shader_hash, code.size());
     vk::ShaderModule spv_module{BuildGuestShader(device, code, shader_hash)};
 
     // Text log + .spv dump. Same split as the graphics path.
@@ -3649,8 +3651,6 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
             const auto begin = std::chrono::steady_clock::now();
             vk::ShaderModule module{EmitComputeModule(device, profile, job->program, shader_hash,
                                                       kept_spirv, job->reference_spirv)};
-            LOG_DEBUG(Render_Vulkan, "Compute pipeline build start: shader={:#016x} spirv_words={}",
-                      shader_hash, kept_spirv.size() / sizeof(u32));
             auto completed_pools = std::move(job->pools);
             job.reset();
             ReturnPools(std::move(completed_pools));
@@ -3667,8 +3667,6 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
         std::vector<u8> kept_spirv;
         vk::ShaderModule module{
             EmitComputeModule(device, profile, program, key.unique_hash, kept_spirv)};
-        LOG_DEBUG(Render_Vulkan, "Compute pipeline build start: shader={:#016x} spirv_words={}",
-                  key.unique_hash, kept_spirv.size() / sizeof(u32));
         const Shader::Info info{std::move(program.info)};
         if (!build_in_parallel) {
             // The driver compiles on this thread. Precache and boot workers would otherwise hold their
