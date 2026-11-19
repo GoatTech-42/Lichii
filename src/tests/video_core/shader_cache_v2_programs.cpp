@@ -569,3 +569,26 @@ TEST_CASE("Shader cache v2: boot strike count reads back what was written",
     std::filesystem::remove(marker, error);
     REQUIRE(VideoCommon::ReadBootStrikes(marker) == 0);
 }
+
+TEST_CASE("Shader cache v2: a recovery boot builds nothing and leaves the driver blob unread",
+          "[video_core][shader_cache_v2]") {
+    // A clean boot (the marker lock held, no strike) builds at boot and reads the blob
+    const auto clean = VideoCommon::PlanBootCache(true, false, 0);
+    CHECK(clean.build_at_boot);
+    CHECK(clean.read_driver_cache);
+    // A recovery boot (strikes on the marker) does neither: the blob the crashed session left
+    // is why the boot crashed, and it stays on disk for diagnosis (#2165)
+    for (const u32 strikes : {1u, 2u, 7u}) {
+        const auto recovery = VideoCommon::PlanBootCache(true, false, strikes);
+        CHECK_FALSE(recovery.build_at_boot);
+        CHECK_FALSE(recovery.read_driver_cache);
+    }
+    // Beside another emulator's load the boot builds nothing and reads no blob either
+    const auto busy = VideoCommon::PlanBootCache(false, true, 0);
+    CHECK_FALSE(busy.build_at_boot);
+    CHECK_FALSE(busy.read_driver_cache);
+    // No other emulator around: the lock is just not needed, the boot builds and reads
+    const auto unlocked = VideoCommon::PlanBootCache(false, false, 0);
+    CHECK(unlocked.build_at_boot);
+    CHECK(unlocked.read_driver_cache);
+}
