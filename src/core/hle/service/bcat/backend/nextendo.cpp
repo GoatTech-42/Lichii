@@ -421,7 +421,18 @@ void Install(const Contents& contents, const fs::path& target, std::string_view 
 }
 
 Outcome Update(u64 title_id, const fs::path& target, const Fetch& fetch) {
-    RecoverInterrupted(target);
+    // Recover under the same cross-process lock the install takes below: a second process can be
+    // mid-install when this one starts, and restoring the backup over its in-flight stage would
+    // clobber both. When the lock stays busy, skip recovery: the process holding it finishes the
+    // install and leaves a consistent cache, and a crash releases the lock for the next boot.
+    {
+        std::error_code ec;
+        fs::create_directories(target.parent_path(), ec);
+        const Common::FS::FileLock recovery_lock{InstallLockPath(target), InstallLockWait};
+        if (recovery_lock.Held()) {
+            RecoverInterrupted(target);
+        }
+    }
     auto response = fetch(title_id);
     // Scarlet and Violet share one event package, published under Violet's title ID.
     if (title_id == PokemonScarlet && response &&
