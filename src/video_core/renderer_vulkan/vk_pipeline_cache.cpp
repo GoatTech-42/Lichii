@@ -1337,6 +1337,13 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
         vulkan_pipeline_cache = LoadVulkanPipelineCache(vulkan_pipeline_cache_filename,
                                                         CACHE_VERSION, read_driver_cache);
+        if (!read_driver_cache && std::filesystem::exists(vulkan_pipeline_cache_filename)) {
+            // The unread blob is the crash's evidence, or another session's cache: hold this
+            // session's saves over it until the fresh cache has content of its own. An empty
+            // cache still serializes its header, so measure that size now as the baseline.
+            keep_unread_driver_blob = true;
+            vulkan_pipeline_cache.Read(&unread_driver_blob_baseline, nullptr);
+        }
     }
     LoadPipelinesV2(title_id, std::move(log_v2), stop_loading, callback, load_begin, precache,
                     build_at_boot);
@@ -3714,6 +3721,18 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
 void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& filename,
                                                  const vk::PipelineCache& pipeline_cache,
                                                  u32 cache_version) {
+    size_t fresh_size = 0;
+    if (keep_unread_driver_blob && pipeline_cache) {
+        pipeline_cache.Read(&fresh_size, nullptr);
+    }
+    if (!VideoCommon::MayReplaceUnreadDriverBlob(keep_unread_driver_blob, fresh_size,
+                                                 unread_driver_blob_baseline)) {
+        // The blob a recovery boot left unread stays for diagnosis while the fresh cache is empty.
+        LOG_INFO(Render_Vulkan,
+                 "Keeping the unread Vulkan driver pipeline cache blob for diagnosis");
+        return;
+    }
+    keep_unread_driver_blob = false;
     // Written beside the cache and renamed over it: the emulator stopped mid-write left the cache
     // empty, and every later boot failed to read it.
     auto temporary = filename;
