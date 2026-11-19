@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <atomic>
+#include <mutex>
 #include <span>
 #include <vector>
 
@@ -145,11 +146,12 @@ public:
      * Finalize the sink stream.
      */
     void Finalize() override {
+        std::scoped_lock lock{stream_mutex};
         if (stream == nullptr) {
             return;
         }
 
-        Stop();
+        StopLocked();
         SDL_ClearAudioStream(stream);
         SDL_DestroyAudioStream(stream);
         stream = nullptr;
@@ -162,7 +164,8 @@ public:
      *                 Default false.
      */
     void Start(bool resume = false) override {
-        if (!IsReady() || !paused) {
+        std::scoped_lock lock{stream_mutex};
+        if (stream == nullptr || failed || !paused) {
             return;
         }
 
@@ -175,6 +178,7 @@ public:
     }
 
     bool IsReady() const override {
+        std::scoped_lock lock{stream_mutex};
         return stream != nullptr && !failed;
     }
 
@@ -197,14 +201,8 @@ public:
      * Stop the sink stream.
      */
     void Stop() override {
-        if (stream == nullptr || paused) {
-            return;
-        }
-        SignalPause();
-        if (!SDL_PauseAudioStreamDevice(stream)) {
-            failed = true;
-            LOG_CRITICAL(Audio_Sink, "Error stopping SDL audio stream: {}", SDL_GetError());
-        }
+        std::scoped_lock lock{stream_mutex};
+        StopLocked();
     }
 
 private:
@@ -312,6 +310,7 @@ private:
      * paused state over; the samples queued for the old device are dropped.
      */
     void ReopenStream() {
+        std::scoped_lock lock{stream_mutex};
         const bool was_paused = paused.load(std::memory_order_relaxed);
 
         if (stream != nullptr) {
@@ -351,6 +350,21 @@ private:
         }
     }
 
+    /// Stop with stream_mutex already held.
+    void StopLocked() {
+        if (stream == nullptr || paused) {
+            return;
+        }
+        SignalPause();
+        if (!SDL_PauseAudioStreamDevice(stream)) {
+            failed = true;
+            LOG_CRITICAL(Audio_Sink, "Error stopping SDL audio stream: {}", SDL_GetError());
+        }
+    }
+
+    /// Serializes stream access between the audio-tick thread (AppendBuffer and ReopenStream)
+    /// and the service threads (Start, Stop, Finalize)
+    mutable std::mutex stream_mutex;
     /// SDL stream attached to an opened input/output device
     SDL_AudioStream* stream{};
     /// Spec the stream was opened with, kept for a reopen
