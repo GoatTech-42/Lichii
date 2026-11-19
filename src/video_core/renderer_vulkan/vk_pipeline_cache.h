@@ -372,6 +372,10 @@ private:
 
     std::filesystem::path vulkan_pipeline_cache_filename;
     vk::PipelineCache vulkan_pipeline_cache;
+    // A boot that left the on-disk driver cache blob unread keeps that file for diagnosis: its
+    // saves hold until the fresh cache outgrows the size an empty cache serializes to (#2165).
+    bool keep_unread_driver_blob = false;
+    size_t unread_driver_blob_baseline = 0;
     size_t pipelines_since_flush{};
     std::chrono::steady_clock::time_point last_flush{};
     std::atomic<size_t> last_cache_size{};
