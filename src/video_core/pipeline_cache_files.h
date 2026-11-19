@@ -290,4 +290,15 @@ struct BootCachePlan {
     return {build_at_boot, build_at_boot};
 }
 
+/// Whether this session's fresh driver pipeline cache blob may replace the file on disk. A boot
+/// that left that file unread (a recovery, or one beside another emulator's load) keeps it for
+/// diagnosis until the fresh cache holds more than an empty one. The empty size is not zero:
+/// an empty cache still serializes its header, so the baseline is measured right after the fresh
+/// cache is created (#2165).
+[[nodiscard]] constexpr bool MayReplaceUnreadDriverBlob(bool blob_left_unread,
+                                                        size_t fresh_blob_size,
+                                                        size_t empty_blob_size) noexcept {
+    return !blob_left_unread || fresh_blob_size > empty_blob_size;
+}
+
 } // namespace VideoCommon
