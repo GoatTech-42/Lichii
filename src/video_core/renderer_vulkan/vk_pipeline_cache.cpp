@@ -974,6 +974,8 @@ PipelineCache::~PipelineCache() {
     serialization_thread.WaitForRequests();
     Common::NoteShutdownProgress();
     SaveUsedPipelines();
+    // A clean close: the cache did not kill this session, whatever it holds.
+    ClearBootStrikes();
     if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
                                      CACHE_VERSION);
@@ -990,6 +992,15 @@ PipelineCache::~PipelineCache() {
         pipeline_binaries->LogCounts("at the end of the session");
         pipeline_binaries.reset();
     }
+}
+
+void PipelineCache::ClearBootStrikes() {
+    if (!boot_lock || !boot_lock->Held() || boot_marker.empty()) {
+        return;
+    }
+    Common::FS::RemoveFile(boot_marker);
+    boot_lock.reset();
+    boot_marker.clear();
 }
 
 void PipelineCache::SaveUsedPipelines() {
@@ -1219,6 +1230,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         shader_cache_v2 = nullptr;
         cache_v2.reset();
         pipeline_binaries.reset();
+        ClearBootStrikes();
     }
 
     namespace StutterTrace = VideoCommon::StutterTrace;
@@ -1232,22 +1244,37 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     }
     namespace CacheV2 = VideoCommon::ShaderCacheV2;
     pipeline_cache_filename = base_dir / CacheV2::FileName;
-    // Left by a boot load that never finished (a driver crash, abort or hang): this boot builds
-    // nothing from the cache. The lock is held for as long as the marker may be there, so while
-    // another emulator holds it, its load is running (or its crash dump is being written).
-    auto boot_marker = pipeline_cache_filename;
+    // Left by a session that ended before its cache checkpoint (a driver crash, abort or
+    // hang): the content counts consecutive such sessions, and this boot builds nothing from
+    // the cache while any strikes stand. The lock is held for as long as the marker may be
+    // there, so while another emulator holds it, its session is running (or its crash dump is
+    // being written).
+    boot_marker = pipeline_cache_filename;
     boot_marker += ".booting";
     auto boot_lock_path = boot_marker;
     boot_lock_path += ".lock";
-    const Common::FS::FileLock boot_lock{boot_lock_path};
-    const bool build_at_boot =
-        boot_lock.Held() ? !Common::FS::Exists(boot_marker) : !boot_lock.Busy();
-    if (boot_lock.Busy()) {
+    boot_lock = std::make_unique<Common::FS::FileLock>(boot_lock_path);
+    const u32 boot_strikes = boot_lock->Held() ? VideoCommon::ReadBootStrikes(boot_marker) : 0;
+    const bool build_at_boot = boot_lock->Held() ? boot_strikes == 0 : !boot_lock->Busy();
+    if (boot_lock->Busy()) {
         LOG_WARNING(Render_Vulkan, "Shader cache v2: another emulator is loading this title's "
                                    "cache; building none at boot this time");
     } else if (!build_at_boot) {
-        LOG_WARNING(Render_Vulkan, "Shader cache v2: the last boot ended while building cached "
-                                   "pipelines; building none at boot this time");
+        LOG_WARNING(Render_Vulkan,
+                    "Shader cache v2: the last session ended while building cached pipelines; "
+                    "building none at boot this time (strike {})",
+                    boot_strikes);
+        if (boot_strikes >= 2) {
+            LOG_WARNING(Render_Vulkan,
+                        "Shader cache v2: {} sessions in a row ended early; if crashes keep "
+                        "following boot, delete this game's shader cache folder: {}",
+                        boot_strikes, Common::FS::PathToUTF8String(base_dir));
+        }
+    }
+    // Written before any driver work (the driver blob load below included): a crash anywhere
+    // after this point leaves the marker, and the strike count it carries, for the next boot.
+    if (boot_lock->Held()) {
+        VideoCommon::WriteBootStrikes(boot_marker, boot_strikes + 1);
     }
     const auto migration =
         MigrateLegacyPipelineCache(base_dir, pipeline_cache_filename, MaxUsedPipelineAge(device));
@@ -1310,15 +1337,8 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         vulkan_pipeline_cache =
             LoadVulkanPipelineCache(vulkan_pipeline_cache_filename, CACHE_VERSION);
     }
-    if (boot_lock.Held() && !Common::FS::NewFile(boot_marker)) {
-        LOG_WARNING(Common_Filesystem, "Couldn't create {}",
-                    Common::FS::PathToUTF8String(boot_marker));
-    }
     LoadPipelinesV2(title_id, std::move(log_v2), stop_loading, callback, load_begin, precache,
                     build_at_boot);
-    if (boot_lock.Held()) {
-        Common::FS::RemoveFile(boot_marker);
-    }
 }
 
 bool PipelineCache::KeyFitsDevice(const GraphicsPipelineCacheKey& key) const {
@@ -2408,6 +2428,8 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
     if (used_this_session.insert(pipeline.get()).second &&
         std::chrono::steady_clock::now() - used_pipelines_saved > save_interval) {
         SaveUsedPipelines();
+        // Real play past the boot: the cache it loaded from did not kill this session.
+        ClearBootStrikes();
     }
     if (current_pipeline) {
         current_pipeline->AddTransition(pipeline.get());
