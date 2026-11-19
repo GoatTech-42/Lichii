@@ -998,6 +998,21 @@ void PipelineCache::ClearBootStrikes() {
     if (!boot_lock || !boot_lock->Held() || boot_marker.empty()) {
         return;
     }
+    if (keep_unread_driver_blob) {
+        // This session stayed healthy on the fresh cache, not on the blob it never read. Move
+        // that blob aside before the strikes go, or the next boot reads the same suspect blob
+        // with none standing (#2165).
+        if (std::filesystem::exists(vulkan_pipeline_cache_filename) &&
+            !VideoCommon::QuarantineUnreadDriverBlob(vulkan_pipeline_cache_filename)) {
+            LOG_ERROR(Common_Filesystem,
+                      "Couldn't move the unread Vulkan driver pipeline cache blob aside; the "
+                      "boot strikes stand");
+            return;
+        }
+        LOG_INFO(Common_Filesystem,
+                 "Moved the unread Vulkan driver pipeline cache blob aside for diagnosis");
+        keep_unread_driver_blob = false;
+    }
     Common::FS::RemoveFile(boot_marker);
     boot_lock.reset();
     boot_marker.clear();
