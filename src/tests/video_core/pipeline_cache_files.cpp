@@ -1072,6 +1072,29 @@ TEST_CASE("An incomplete graphics record's key is recorded again unless a later 
     REQUIRE(disk_pipelines == std::unordered_set<u64>{8, 9});
 }
 
+TEST_CASE("A graphics record that lacks a read value goes to live recapture, pipeline or not",
+          "[pipeline_cache_files][incomplete_records]") {
+    // The conservative answers let a translation succeed on a guessed classification (#603):
+    // the recapture decision reads only the environments, so a pipeline built on the guess
+    // cannot mask it and stay cached for the whole session.
+    VideoCommon::FileEnvironment env;
+    const std::span<const VideoCommon::FileEnvironment> single{&env, 1};
+    CHECK_FALSE(Vulkan::GraphicsRecordLacksRecordedValue(single, ReadProperties));
+    // Ask for a classification the record holds no answer to
+    CHECK_FALSE(env.IsCbufStorageBufferPointer(2, 0x40));
+    CHECK(Vulkan::GraphicsRecordLacksRecordedValue(single, ReadProperties));
+    // One environment's guess sends the whole record to recapture
+    VideoCommon::FileEnvironment pair[2];
+    (void)pair[1].IsCbufStorageBufferPointer(2, 0x40);
+    CHECK(Vulkan::GraphicsRecordLacksRecordedValue(pair, ReadProperties));
+    // The keep/drop decision for a translated pipeline: a built pipeline stays only when the
+    // record held every value the translator read; a guess drops it, at boot and in the prebuild
+    CHECK(Vulkan::KeepTranslatedPipeline(true, false));
+    CHECK_FALSE(Vulkan::KeepTranslatedPipeline(true, true));
+    CHECK_FALSE(Vulkan::KeepTranslatedPipeline(false, false));
+    CHECK_FALSE(Vulkan::KeepTranslatedPipeline(false, true));
+}
+
 TEST_CASE("A rewrite cut off is removed at the next load",
           "[pipeline_cache_files][remove_pipelines]") {
     TempDir temp;
