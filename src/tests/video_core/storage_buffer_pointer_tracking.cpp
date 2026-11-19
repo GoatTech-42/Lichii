@@ -11,11 +11,11 @@
 
 #include "shader_recompiler/backend/nvn_storage_descriptor.h"
 #include "shader_recompiler/environment.h"
-#include "video_core/shader_environment.h"
 #include "shader_recompiler/exception.h"
 #include "shader_recompiler/frontend/ir/ir_emitter.h"
 #include "shader_recompiler/host_translate_info.h"
 #include "shader_recompiler/ir_opt/passes.h"
+#include "video_core/shader_environment.h"
 
 namespace {
 namespace IR = Shader::IR;
