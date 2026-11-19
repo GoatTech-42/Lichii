@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <span>
@@ -36,6 +37,7 @@
 #include "video_core/memory_manager.h"
 #include "video_core/native_lowering.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/pipeline_cache_files.h"
 #include "video_core/renderer_null/null_rasterizer.h"
 #include "video_core/shader_cache_v2/cache.h"
 #include "video_core/shader_cache_v2/cache_file.h"
@@ -540,4 +542,30 @@ TEST_CASE("Shader cache v2: compute environments take recorded programs with eve
     REQUIRE_FALSE(VideoCore::Nx2Debug::AnyRejected());
     REQUIRE(fixture.Environment(texture.inputs.native_code_address, &cache).LoweredNative() ==
             texture_code);
+}
+
+TEST_CASE("Shader cache v2: boot strike count reads back what was written",
+          "[video_core][shader_cache_v2]") {
+    TempDir temp;
+    const auto marker = temp.path / "cache.bin.booting";
+    REQUIRE(VideoCommon::ReadBootStrikes(marker) == 0);
+    // Empty, as an in-flight load (or a build that kept no count) leaves it
+    { const std::ofstream stream(marker, std::ios::binary); }
+    REQUIRE(VideoCommon::ReadBootStrikes(marker) == 1);
+    VideoCommon::WriteBootStrikes(marker, 3);
+    REQUIRE(VideoCommon::ReadBootStrikes(marker) == 3);
+    // Content a crash cut short reads as one strike
+    {
+        std::ofstream stream(marker, std::ios::binary | std::ios::trunc);
+        stream << "3\x00";
+    }
+    REQUIRE(VideoCommon::ReadBootStrikes(marker) == 3);
+    {
+        std::ofstream stream(marker, std::ios::binary | std::ios::trunc);
+        stream << "garbage";
+    }
+    REQUIRE(VideoCommon::ReadBootStrikes(marker) == 1);
+    std::error_code error;
+    std::filesystem::remove(marker, error);
+    REQUIRE(VideoCommon::ReadBootStrikes(marker) == 0);
 }
