@@ -3,11 +3,14 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -235,6 +238,39 @@ inline PipelineCacheClear ClearPipelineCache(const std::filesystem::path& direct
         }
     }
     return PipelineCacheClear::Cleared;
+}
+
+/// Consecutive sessions of a title that ended without a healthy cache checkpoint, kept next to
+/// the v2 cache as a small decimal count. An empty file (an in-flight load, or one a build that
+/// kept no count left) reads as one strike, as does content a crash cut short. The boot load
+/// writes the count before any driver work; a session that reaches its used-pipeline checkpoint
+/// or a clean close removes the file, so the next boot after a crash builds nothing cached.
+[[nodiscard]] inline u32 ReadBootStrikes(const std::filesystem::path& marker) {
+    std::error_code error;
+    if (!std::filesystem::exists(marker, error) || error) {
+        return 0;
+    }
+    std::ifstream stream(marker, std::ios::binary);
+    const std::string content{std::istreambuf_iterator<char>(stream),
+                              std::istreambuf_iterator<char>()};
+    const auto begin = content.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return 1;
+    }
+    u32 strikes{};
+    const auto* const first = content.data() + begin;
+    const auto* const last = content.data() + content.size();
+    if (std::from_chars(first, last, strikes).ec != std::errc{} || strikes == 0) {
+        return 1;
+    }
+    return strikes;
+}
+
+/// One small truncating write; a crash can leave garbage, which ReadBootStrikes reads as one
+/// strike.
+inline void WriteBootStrikes(const std::filesystem::path& marker, u32 strikes) {
+    std::ofstream stream(marker, std::ios::binary | std::ios::trunc);
+    stream << strikes << '\n';
 }
 
 } // namespace VideoCommon
