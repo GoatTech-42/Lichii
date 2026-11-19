@@ -592,3 +592,15 @@ TEST_CASE("Shader cache v2: a recovery boot builds nothing and leaves the driver
     CHECK(unlocked.build_at_boot);
     CHECK(unlocked.read_driver_cache);
 }
+
+TEST_CASE("Shader cache v2: a boot that left the driver blob unread replaces it only once the "
+          "fresh cache has content",
+          "[video_core][shader_cache_v2]") {
+    // A normal boot replaces the on-disk blob as it always has, empty fresh cache or not
+    CHECK(VideoCommon::MayReplaceUnreadDriverBlob(false, 0, 32));
+    // An empty fresh cache still serializes its header: the unread blob is kept for diagnosis
+    CHECK_FALSE(VideoCommon::MayReplaceUnreadDriverBlob(true, 32, 32));
+    CHECK_FALSE(VideoCommon::MayReplaceUnreadDriverBlob(true, 0, 32));
+    // Once the fresh cache holds more than an empty one, the old file is replaced (#2165)
+    CHECK(VideoCommon::MayReplaceUnreadDriverBlob(true, 4096, 32));
+}
