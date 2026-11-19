@@ -273,4 +273,21 @@ inline void WriteBootStrikes(const std::filesystem::path& marker, u32 strikes) {
     stream << strikes << '\n';
 }
 
+/// What a boot does with a title's shader cache files, from the boot marker's state (#2165).
+/// Only a boot free of strikes, with no other emulator loading, builds cached pipelines at boot
+/// and reads the driver pipeline cache blob. A recovery boot (strikes on the marker) or one
+/// beside another emulator's load builds nothing at boot and leaves the blob unread: the blob a
+/// crashed session left is why the next boot crashed, and feeding it back to the driver can
+/// crash the recovery boot the same way; it stays on disk, untouched, for diagnosis.
+struct BootCachePlan {
+    bool build_at_boot;
+    bool read_driver_cache;
+};
+
+[[nodiscard]] inline BootCachePlan PlanBootCache(bool lock_held, bool lock_busy,
+                                                 u32 boot_strikes) noexcept {
+    const bool build_at_boot = lock_held ? boot_strikes == 0 : !lock_busy;
+    return {build_at_boot, build_at_boot};
+}
+
 } // namespace VideoCommon
