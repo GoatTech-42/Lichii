@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "common/fs/file_lock.h"
 #include "common/thread_worker.h"
 #include "shader_recompiler/frontend/ir/basic_block.h"
 #include "shader_recompiler/frontend/ir/value.h"
@@ -301,6 +302,12 @@ private:
     std::optional<ScheduledPrebuild<GraphicsPipelineCacheKey, GraphicsPipeline>> scheduled_prebuild;
     /// When the boot load that started the background prebuild began, until the prebuild is done
     std::optional<std::chrono::steady_clock::time_point> prebuild_load_begin;
+    /// Strike file next to the v2 cache (VideoCommon::ReadBootStrikes): written before the boot
+    /// load's first driver work and cleared by ClearBootStrikes once a session proves healthy,
+    /// so a crash leaves it for the next boot. The lock is held for as long as the marker may
+    /// exist, so no second emulator takes an in-flight load for a crashed one.
+    std::filesystem::path boot_marker;
+    std::unique_ptr<Common::FS::FileLock> boot_lock;
 
     GraphicsPipelineCacheKey graphics_key{};
     GraphicsPipeline* current_pipeline{};
@@ -350,6 +357,9 @@ private:
     std::unordered_set<const GraphicsPipeline*> used_this_session;
     std::chrono::steady_clock::time_point used_pipelines_saved{};
     void SaveUsedPipelines();
+    /// Removes the boot strike marker and releases its lock: a session that reached its
+    /// used-pipeline checkpoint or a clean close trusts the cache again.
+    void ClearBootStrikes();
 
     /// The cache pipeline_cache_filename names, and this session's Used record
     std::unique_ptr<VideoCommon::ShaderCacheV2::Cache> cache_v2;
