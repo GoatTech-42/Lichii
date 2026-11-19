@@ -301,4 +301,19 @@ struct BootCachePlan {
     return !blob_left_unread || fresh_blob_size > empty_blob_size;
 }
 
+/// Moves a driver pipeline cache blob a boot left unread aside before the boot strikes clear.
+/// Clearing the strikes tells the next boot the on-disk blob is safe to read; a blob this
+/// session never read and never replaced has not earned that, so it moves to <file>.unread,
+/// still on disk for diagnosis, and the next boot starts the driver cache fresh. An earlier
+/// quarantine is replaced. False when the move failed: the strikes must stand (#2165).
+[[nodiscard]] inline bool QuarantineUnreadDriverBlob(const std::filesystem::path& filename) {
+    auto quarantine = filename;
+    quarantine += ".unread";
+    std::error_code error;
+    std::filesystem::remove(quarantine, error);
+    error.clear();
+    std::filesystem::rename(filename, quarantine, error);
+    return !error;
+}
+
 } // namespace VideoCommon
