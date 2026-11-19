@@ -659,34 +659,49 @@ TEST_CASE("A cached environment tells when the translator asked for a value it l
     TempDir temp;
     const auto path = temp.path / "incomplete.bin";
     AppendPipeline(path, 9, Shader::Stage::Fragment);
-    const auto lookups = std::to_array<std::function<void(VideoCommon::FileEnvironment&)>>({
-        [](auto& env) { static_cast<void>(env.ReadCbufValue(1, 20)); },
-        [](auto& env) { static_cast<void>(env.ReadTextureType(4)); },
-        [](auto& env) { static_cast<void>(env.ReadTexturePixelFormat(3)); },
-        [](auto& env) { static_cast<void>(env.IsCbufStorageBufferPointer(1, 16)); },
-        [](auto& env) { static_cast<void>(env.IsCbufIndirectStorageBufferPointer(1, 16, 8)); },
-    });
-    for (const auto& lookup : lookups) {
-        bool loaded = false;
-        VideoCommon::LoadPipelines(
-            {}, path, VideoCommon::VulkanPipelineCacheVersion,
-            [](std::ifstream&, VideoCommon::FileEnvironment) { FAIL("Unexpected compute record"); },
-            [&](std::ifstream& file, std::vector<VideoCommon::FileEnvironment> envs) {
-                u64 key{};
-                file.read(reinterpret_cast<char*>(&key), sizeof(key));
-                auto& env = envs.front();
-                REQUIRE(env.ReadCbufValue(1, 16) == 0x1357);
-                REQUIRE(env.ReadTextureType(3) == Shader::TextureType::Color2D);
-                // Code outside the record is not a missing value: a live environment fails too.
-                REQUIRE_THROWS_AS(static_cast<void>(env.ReadInstruction(0x1000)),
-                                  Shader::LogicError);
-                REQUIRE_FALSE(env.LacksRecordedValue(ReadProperties));
-                REQUIRE_THROWS_AS(lookup(env), Shader::LogicError);
-                REQUIRE(env.LacksRecordedValue(ReadProperties));
-                loaded = true;
-            });
-        REQUIRE(loaded);
-    }
+    // An unrecorded plain value throws; the storage-pointer predicates answer conservatively
+    // instead, so a translation can run on the guess and flag the record (#603).
+    const auto throwing_lookups =
+        std::to_array<std::function<bool(VideoCommon::FileEnvironment&)>>({
+            [](auto& env) { static_cast<void>(env.ReadCbufValue(1, 20)); return true; },
+            [](auto& env) { static_cast<void>(env.ReadTextureType(4)); return true; },
+            [](auto& env) { static_cast<void>(env.ReadTexturePixelFormat(3)); return true; },
+        });
+    const auto guessed_lookups =
+        std::to_array<std::function<bool(VideoCommon::FileEnvironment&)>>({
+            [](auto& env) { return env.IsCbufStorageBufferPointer(1, 16); },
+            [](auto& env) { return env.IsCbufIndirectStorageBufferPointer(1, 16, 8); },
+        });
+    const auto run = [&](const auto& lookups, bool expect_throw) {
+        for (const auto& lookup : lookups) {
+            bool loaded = false;
+            VideoCommon::LoadPipelines(
+                {}, path, VideoCommon::VulkanPipelineCacheVersion,
+                [](std::ifstream&, VideoCommon::FileEnvironment) { FAIL("Unexpected compute record"); },
+                [&](std::ifstream& file, std::vector<VideoCommon::FileEnvironment> envs) {
+                    u64 key{};
+                    file.read(reinterpret_cast<char*>(&key), sizeof(key));
+                    auto& env = envs.front();
+                    REQUIRE(env.ReadCbufValue(1, 16) == 0x1357);
+                    REQUIRE(env.ReadTextureType(3) == Shader::TextureType::Color2D);
+                    // Code outside the record is not a missing value: a live environment fails too.
+                    REQUIRE_THROWS_AS(static_cast<void>(env.ReadInstruction(0x1000)),
+                                      Shader::LogicError);
+                    REQUIRE_FALSE(env.LacksRecordedValue(ReadProperties));
+                    if (expect_throw) {
+                        REQUIRE_THROWS_AS(static_cast<void>(lookup(env)), Shader::LogicError);
+                    } else {
+                        // Conservative answer for a slot outside bank 0: not a storage pointer.
+                        REQUIRE_FALSE(lookup(env));
+                    }
+                    REQUIRE(env.LacksRecordedValue(ReadProperties));
+                    loaded = true;
+                });
+            REQUIRE(loaded);
+        }
+    };
+    run(throwing_lookups, true);
+    run(guessed_lookups, false);
 }
 
 TEST_CASE("A missing value is conclusive where the record was made, or for an older build",
