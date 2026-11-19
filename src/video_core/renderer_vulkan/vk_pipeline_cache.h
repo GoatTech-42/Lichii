@@ -255,8 +255,10 @@ private:
     void SerializeVulkanPipelineCache(const std::filesystem::path& filename,
                                       const vk::PipelineCache& pipeline_cache, u32 cache_version);
 
+    /// `read_blob` is false on a recovery boot: the cache starts empty, and the blob the
+    /// crashed session left stays on disk, untouched, for diagnosis.
     vk::PipelineCache LoadVulkanPipelineCache(const std::filesystem::path& filename,
-                                              u32 expected_cache_version);
+                                              u32 expected_cache_version, bool read_blob);
 
     void QueueVulkanPipelineCacheFlush();
 
