@@ -1255,7 +1255,8 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     boot_lock_path += ".lock";
     boot_lock = std::make_unique<Common::FS::FileLock>(boot_lock_path);
     const u32 boot_strikes = boot_lock->Held() ? VideoCommon::ReadBootStrikes(boot_marker) : 0;
-    const bool build_at_boot = boot_lock->Held() ? boot_strikes == 0 : !boot_lock->Busy();
+    const auto [build_at_boot, read_driver_cache] =
+        VideoCommon::PlanBootCache(boot_lock->Held(), boot_lock->Busy(), boot_strikes);
     if (boot_lock->Busy()) {
         LOG_WARNING(Render_Vulkan, "Shader cache v2: another emulator is loading this title's "
                                    "cache; building none at boot this time");
@@ -1334,8 +1335,8 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             LOG_WARNING(Render_Vulkan,
                         "Couldn't copy the older driver pipeline cache; this one starts empty");
         }
-        vulkan_pipeline_cache =
-            LoadVulkanPipelineCache(vulkan_pipeline_cache_filename, CACHE_VERSION);
+        vulkan_pipeline_cache = LoadVulkanPipelineCache(vulkan_pipeline_cache_filename,
+                                                        CACHE_VERSION, read_driver_cache);
     }
     LoadPipelinesV2(title_id, std::move(log_v2), stop_loading, callback, load_begin, precache,
                     build_at_boot);
@@ -3768,7 +3769,8 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
 }
 
 vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::path& filename,
-                                                         u32 expected_cache_version) {
+                                                         u32 expected_cache_version,
+                                                         bool read_blob) {
     const auto create_pipeline_cache = [this](size_t data_size, const void* data) {
         VkPipelineCacheCreateInfo pipeline_cache_ci = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
@@ -3778,6 +3780,11 @@ vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::
             .pInitialData = data};
         return device.GetLogical().CreatePipelineCache(pipeline_cache_ci);
     };
+    if (!read_blob) {
+        // A recovery boot feeds the driver nothing the crashed session left: the blob is why
+        // the strike marker exists, and it stays on disk, untouched, for diagnosis.
+        return create_pipeline_cache(0, nullptr);
+    }
     try {
         std::ifstream file(filename, std::ios::binary | std::ios::ate);
         if (!file.is_open()) {
