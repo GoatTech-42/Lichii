@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
@@ -22,7 +23,6 @@
 #include <vector>
 
 #include "common/common_types.h"
-#include "common/fs/file_lock.h"
 #include "common/thread_worker.h"
 #include "shader_recompiler/frontend/ir/basic_block.h"
 #include "shader_recompiler/frontend/ir/value.h"
@@ -160,6 +160,8 @@ public:
 private:
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipelineSlowPath();
 
+    [[nodiscard]] bool SkipPendingMeshDraw() const;
+
     /// Returns `pipeline` when it is built or its draw must wait for it, nullptr when the draw
     /// may be skipped while it builds (asynchronous shaders, CanDiscardPendingDraw).
     [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline) noexcept;
@@ -252,21 +254,21 @@ private:
     /// Cancels the v2 prebuild and waits for its running stages
     void StopBackgroundJobs();
 
-    void SerializeVulkanPipelineCache(const std::filesystem::path& filename,
+    /// Returns true when the file was written and replaced the previous one.
+    bool SerializeVulkanPipelineCache(const std::filesystem::path& filename,
                                       const vk::PipelineCache& pipeline_cache, u32 cache_version);
 
-    /// `read_blob` is false on a recovery boot: the cache starts empty, and the blob the
-    /// crashed session left stays on disk, untouched, for diagnosis.
+    /// Sets vulkan_pipeline_cache_restored when the file's contents were read back.
     vk::PipelineCache LoadVulkanPipelineCache(const std::filesystem::path& filename,
-                                              u32 expected_cache_version, bool read_blob);
+                                              u32 expected_cache_version);
 
     void QueueVulkanPipelineCacheFlush();
 
     /// Queues one write of the driver pipeline cache file on the serialization thread, with no
     /// throttle, or writes it now where reading the cache during a build crashes. For the end of
     /// a precache: its builds never reach the timed flush, which counts only pipelines built
-    /// during play.
-    void QueueVulkanPipelineCacheSave();
+    /// during play. `after_save` runs once the file was written, never when the write failed.
+    void QueueVulkanPipelineCacheSave(std::function<void()> after_save = {});
 
     /// One build of the shader precache: a compute pipeline built and destroyed
     struct PrecacheJob {
@@ -296,6 +298,8 @@ private:
     VideoCore::ShaderNotify& shader_notify;
     bool use_asynchronous_shaders{};
     bool use_vulkan_pipeline_cache{};
+    /// Whether this boot's Vulkan pipeline cache started from the saved file, not empty
+    bool vulkan_pipeline_cache_restored{};
     /// The pipelines' builds, the prebuild and the precache. Declared before the pipelines, whose
     /// builds it runs.
     std::optional<VideoCommon::ShaderJobScheduler> shader_jobs;
@@ -304,12 +308,6 @@ private:
     std::optional<ScheduledPrebuild<GraphicsPipelineCacheKey, GraphicsPipeline>> scheduled_prebuild;
     /// When the boot load that started the background prebuild began, until the prebuild is done
     std::optional<std::chrono::steady_clock::time_point> prebuild_load_begin;
-    /// Strike file next to the v2 cache (VideoCommon::ReadBootStrikes): written before the boot
-    /// load's first driver work and cleared by ClearBootStrikes once a session proves healthy,
-    /// so a crash leaves it for the next boot. The lock is held for as long as the marker may
-    /// exist, so no second emulator takes an in-flight load for a crashed one.
-    std::filesystem::path boot_marker;
-    std::unique_ptr<Common::FS::FileLock> boot_lock;
 
     GraphicsPipelineCacheKey graphics_key{};
     GraphicsPipeline* current_pipeline{};
@@ -359,9 +357,6 @@ private:
     std::unordered_set<const GraphicsPipeline*> used_this_session;
     std::chrono::steady_clock::time_point used_pipelines_saved{};
     void SaveUsedPipelines();
-    /// Removes the boot strike marker and releases its lock: a session that reached its
-    /// used-pipeline checkpoint or a clean close trusts the cache again.
-    void ClearBootStrikes();
 
     /// The cache pipeline_cache_filename names, and this session's Used record
     std::unique_ptr<VideoCommon::ShaderCacheV2::Cache> cache_v2;
@@ -372,10 +367,6 @@ private:
 
     std::filesystem::path vulkan_pipeline_cache_filename;
     vk::PipelineCache vulkan_pipeline_cache;
-    // A boot that left the on-disk driver cache blob unread keeps that file for diagnosis: its
-    // saves hold until the fresh cache outgrows the size an empty cache serializes to (#2165).
-    bool keep_unread_driver_blob = false;
-    size_t unread_driver_blob_baseline = 0;
     size_t pipelines_since_flush{};
     std::chrono::steady_clock::time_point last_flush{};
     std::atomic<size_t> last_cache_size{};
