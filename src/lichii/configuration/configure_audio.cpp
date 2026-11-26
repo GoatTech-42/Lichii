@@ -96,11 +96,21 @@ void ConfigureAudio::Setup(const ConfigurationShared::Builder& builder) {
                 connect(restore_sink_button, &QAbstractButton::clicked, [this](bool) {
                     Settings::values.sink_id.SetGlobal(true);
                     const int sink_index = static_cast<int>(Settings::values.sink_id.GetValue());
-                    sink_combo_box->setCurrentIndex(sink_index);
+                    {
+                        // Restoring the global sink is not a user edit: without
+                        // this block the currentIndexChanged handler re-pins all
+                        // three values as per-game.
+                        const QSignalBlocker blocker(sink_combo_box);
+                        sink_combo_box->setCurrentIndex(sink_index);
+                    }
                     ConfigureAudio::UpdateAudioDevices(sink_index);
                     Settings::values.audio_output_device_id.SetGlobal(true);
                     Settings::values.audio_input_device_id.SetGlobal(true);
+                    SetOutputDevicesFromDeviceID();
+                    SetInputDevicesFromDeviceID();
                     restore_sink_button->setVisible(false);
+                    restore_output_device_button->setVisible(false);
+                    restore_input_device_button->setVisible(false);
                 });
                 connect(sink_combo_box, qOverload<int>(&QComboBox::currentIndexChanged),
                         [this, global_sink_match](const int slot) {
