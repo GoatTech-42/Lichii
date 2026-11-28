@@ -37,9 +37,10 @@ public:
         static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable.");
 
         // A soft assert only logs: zero-fill instead of reading past the parcel.
+        // (T{} rather than {}: QueueBufferInput's default constructor is explicit.)
         if (read_index + sizeof(T) > read_buffer.size()) [[unlikely]] {
             ASSERT(read_index + sizeof(T) <= read_buffer.size());
-            val = {};
+            val = T{};
             read_index = read_buffer.size();
             return;
         }
