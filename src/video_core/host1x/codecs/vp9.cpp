@@ -9,6 +9,7 @@
 
 #include "common/alignment.h"
 #include "common/assert.h"
+#include "common/logging.h"
 #include "video_core/host1x/codecs/vp9.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/memory_manager.h"
@@ -435,6 +436,13 @@ Vp9FrameContainer VP9::GetCurrentFrame() {
     {
         // gpu.SyncGuestHost(); epic, why?
         current_frame.info = GetVp9PictureInfo();
+        if (!host1x.gmmu_manager.IsRangeWithinGPUAddressSpace(regs.frame_bitstream_offset.Address(),
+                                                              current_frame.info.bitstream_size)) {
+            // The size is the guest's: past the address space the read would serve zeros.
+            LOG_ERROR(HW_GPU, "VP9 bitstream of {} bytes at {:#x} is outside the GPU address space",
+                      current_frame.info.bitstream_size, regs.frame_bitstream_offset.Address());
+            return current_frame;
+        }
         current_frame.bit_stream.resize(current_frame.info.bitstream_size);
         host1x.gmmu_manager.ReadBlock(regs.frame_bitstream_offset.Address(), current_frame.bit_stream.data(), current_frame.info.bitstream_size);
     }
@@ -847,6 +855,9 @@ std::span<const u8> VP9::ComposeFrame() {
         current_frame_info = curr_frame.info;
         SetFrameDimensions(current_frame_info.frame_size.width, current_frame_info.frame_size.height);
         bitstream = std::move(curr_frame.bit_stream);
+    }
+    if (bitstream.empty()) {
+        return {};
     }
     // The uncompressed header routine sets PrevProb parameters needed for the compressed header
     auto uncomp_writer = ComposeUncompressedHeader();
